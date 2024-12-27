@@ -1,0 +1,145 @@
+#include <fstream>
+#include <G4RunManager.hh>
+#include <G4NistManager.hh>
+#include <G4Box.hh>
+#include <G4LogicalVolume.hh>
+#include <G4PVPlacement.hh>
+#include <G4SystemOfUnits.hh>
+#include <G4ParticleGun.hh>
+#include <G4ParticleTable.hh>
+#include <G4VUserDetectorConstruction.hh>
+#include <G4VUserPrimaryGeneratorAction.hh>
+#include <G4PhysListFactory.hh>
+#include <G4UserSteppingAction.hh>
+#include <G4Step.hh>
+#include <G4VisManager.hh>
+#include <G4VisExecutive.hh>
+#include <G4UIExecutive.hh>
+
+// Classe para definir a geometria do detector
+class SimpleDetector : public G4VUserDetectorConstruction {
+public:
+    G4VPhysicalVolume* Construct() override {
+        G4NistManager* nist = G4NistManager::Instance();
+
+        // Define o mundo
+        G4double world_size = 10.0 * m;
+        G4Material* air = nist->FindOrBuildMaterial("G4_AIR");
+        G4Box* worldBox = new G4Box("World", world_size / 2, world_size / 2, world_size / 2);
+        G4LogicalVolume* worldLog = new G4LogicalVolume(worldBox, air, "World");
+        G4VPhysicalVolume* worldPhys = new G4PVPlacement(nullptr, {}, worldLog, "World", nullptr, false, 0);
+
+        return worldPhys;
+    }
+};
+
+// Classe para configurar a colisão de partículas (elétron e pósitron)
+class HiggsCollision : public G4VUserPrimaryGeneratorAction {
+private:
+    G4ParticleGun* particleGun;
+
+public:
+    HiggsCollision() {
+        particleGun = new G4ParticleGun(1); // Disparo de uma partícula por vez
+    }
+
+    void GeneratePrimaries(G4Event* anEvent) override {
+        G4ParticleTable* particleTable = G4ParticleTable::GetParticleTable();
+
+        // Configuração do elétron
+        G4ParticleDefinition* electron = particleTable->FindParticle("e-");
+        particleGun->SetParticleDefinition(electron);
+        particleGun->SetParticleEnergy(125 * GeV); // Energia inicial
+        particleGun->SetParticleMomentumDirection(G4ThreeVector(0, 0, 1)); // Direção para o centro
+        particleGun->SetParticlePosition(G4ThreeVector(0, 0, -5 * cm)); // Origem do elétron
+        particleGun->GeneratePrimaryVertex(anEvent);
+
+        // Configuração do pósitron
+        G4ParticleDefinition* positron = particleTable->FindParticle("e+");
+        particleGun->SetParticleDefinition(positron);
+        particleGun->SetParticleEnergy(125 * GeV); // Energia inicial
+        particleGun->SetParticleMomentumDirection(G4ThreeVector(0, 0, -1)); // Direção para o centro
+        particleGun->SetParticlePosition(G4ThreeVector(0, 0, 5 * cm)); // Origem do pósitron
+        particleGun->GeneratePrimaryVertex(anEvent);
+    }
+};
+
+// Classe para salvar os dados das partículas
+class SteppingAction : public G4UserSteppingAction {
+private:
+    std::ofstream outputFile;
+
+public:
+    SteppingAction() {
+        outputFile.open("higgs_collision_trajectories.txt");
+        if (!outputFile.is_open()) {
+            G4cerr << "Erro ao abrir o arquivo para salvar os resultados!" << G4endl;
+            exit(1);
+        }
+        outputFile << "Particle\tPosX (mm)\tPosY (mm)\tPosZ (mm)\tEnergy (GeV)\n";
+    }
+
+    ~SteppingAction() {
+        if (outputFile.is_open()) {
+            outputFile.close();
+        }
+    }
+
+    void UserSteppingAction(const G4Step* step) override {
+        G4String particleName = step->GetTrack()->GetDefinition()->GetParticleName();
+        G4ThreeVector position = step->GetPreStepPoint()->GetPosition();
+        G4double energy = step->GetPreStepPoint()->GetKineticEnergy();
+
+        outputFile << particleName << "\t"
+                   << position.x() / mm << "\t"
+                   << position.y() / mm << "\t"
+                   << position.z() / mm << "\t"
+                   << energy / GeV << "\n";
+    }
+};
+
+// Função principal
+int main(int argc, char** argv) {
+    G4RunManager* runManager = new G4RunManager();
+
+    // Configura a geometria do detector
+    runManager->SetUserInitialization(new SimpleDetector());
+
+    // Configura a física
+    G4PhysListFactory physicsFactory;
+    G4VModularPhysicsList* physicsList = physicsFactory.GetReferencePhysList("FTFP_BERT");
+    runManager->SetUserInitialization(physicsList);
+
+    // Configura a colisão
+    runManager->SetUserAction(new HiggsCollision());
+
+    // Configura a ação de passos
+    runManager->SetUserAction(new SteppingAction());
+
+    // Inicializa a simulação
+    runManager->Initialize();
+
+    // Configura a visualização
+    G4VisManager* visManager = new G4VisExecutive();
+    visManager->Initialize();
+
+    // Interface de usuário
+    G4UIExecutive* ui = new G4UIExecutive(argc, argv);
+    G4UImanager* UImanager = G4UImanager::GetUIpointer();
+
+    // Comandos de visualização
+    UImanager->ApplyCommand("/vis/open OGL 800x800");
+    UImanager->ApplyCommand("/vis/drawVolume");
+    UImanager->ApplyCommand("/vis/scene/add/trajectories smooth");
+    UImanager->ApplyCommand("/vis/viewer/set/autoZoom");
+
+    // Inicia a interface interativa
+    ui->SessionStart();
+
+    // Finaliza
+    delete ui;
+    delete visManager;
+    delete runManager;
+
+    return 0;
+}
